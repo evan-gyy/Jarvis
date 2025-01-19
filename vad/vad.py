@@ -1,10 +1,11 @@
 import torch
-from hubconf import silero_vad
+from .hubconf import silero_vad
 import numpy as np
 import pyaudio
 import wave
 import time
 import os
+from asr.asr import ASR
 
 
 class VAD:
@@ -13,12 +14,24 @@ class VAD:
         self.CHUNK = 512 
         self.THRESHOLD = 0.8
         self.output_dir = os.path.join(os.path.dirname(__file__), 'output')
+        # 添加上次打印时间的记录
+        self.last_prob_print_time = 0
+        self.print_interval = 0.5  # 打印间隔设为0.5秒，即每秒打印2次
         # 加载VAD模型
         self.model, self.vad_iterator = self.load_model()
         # 初始化音频流
-        self.audio_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=self.SAMPLING_RATE, input=True, frames_per_buffer=self.CHUNK)
+        self.audio_stream = pyaudio.PyAudio().open(
+            format=pyaudio.paInt16, 
+            channels=1, 
+            rate=self.SAMPLING_RATE, 
+            input=True, 
+            frames_per_buffer=self.CHUNK
+        )
+        # 初始化ASR模型
+        self.asr = ASR()
 
     def load_model(self):
+        """加载Silero VAD模型"""
         print("加载VAD模型...")
         start_time = time.time()
         model, utils = silero_vad(onnx=True, force_onnx_cpu=False)
@@ -46,7 +59,19 @@ class VAD:
             wf.setframerate(self.SAMPLING_RATE)
             wf.writeframes(audio_data)
             
-        print(f"音频保存为 {wav_filename}，时长从 {start_time:.2f} 秒到 {end_time:.2f} 秒，状态：{status}")
+        print(f"音频保存为 {wav_filename}，时长为 {(end_time - start_time):.2f} s，状态：{status}")
+        
+        # 保存完音频后立即进行ASR识别
+        if os.path.exists(wav_filename):
+            print("开始进行语音识别...")
+            start_time = time.time()
+            text = self.asr.transcribe(wav_filename)
+            end_time = time.time()
+            print(f"语音识别完成，耗时: {(end_time - start_time) * 1000:.2f} ms")
+            if text:
+                print(f"识别结果: {text}")
+                return text
+        return None
 
     def process_audio_chunk(self, data):
         """处理单个音频数据块"""
@@ -55,7 +80,13 @@ class VAD:
         
         with torch.no_grad():
             speech_prob = self.model(audio_chunk.view(1, -1), self.SAMPLING_RATE).item()
-            print(f"语音活动检测概率: {speech_prob}")
+            
+            # 控制打印频率
+            current_time = time.time()
+            if current_time - self.last_prob_print_time >= self.print_interval:
+                print(f"语音检测概率: {speech_prob:.2f}")
+                self.last_prob_print_time = current_time
+                
             return speech_prob
 
     def handle_speech_detection(self, speech_prob, speech_state):
@@ -79,10 +110,16 @@ class VAD:
             
             if time.time() - speech_state['last_end_time'] >= 1.0:
                 current_time = time.time()
-                print("停止检测到语音，保存录音")
-                self.save_wav(audio_chunks, speech_state['start_time'], current_time, 0)
+                print("停止检测到语音，保存录音并进行识别")
+                text = self.save_wav(audio_chunks, speech_state['start_time'], current_time, 0)
                 speech_state['start_time'] = None
                 speech_state['last_end_time'] = None
+                
+                # 这里可以添加调用LLM的代码
+                if text:
+                    # TODO: 调用LLM处理识别后的文本
+                    pass
+                    
                 return True
         return False
 
