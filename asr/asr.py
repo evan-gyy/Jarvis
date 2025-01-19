@@ -26,7 +26,8 @@ class ASR:
             res = self.model.generate(
                 input=audio_path,
                 cache={},
-                language="auto",
+                # language="auto",
+                language="zh",
                 use_itn=True,
                 batch_size_s=60,
                 merge_vad=True,

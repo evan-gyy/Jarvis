@@ -1,3 +1,6 @@
 silero-vad-master/
 models/
 assets/
+
+# 环境变量文件
+.env

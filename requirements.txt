@@ -1,0 +1,7 @@
+openai>=1.0.0
+tiktoken
+python-dotenv
+pyaudio
+numpy
+torch
+wave 

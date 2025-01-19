@@ -6,6 +6,7 @@ import wave
 import time
 import os
 from asr.asr import ASR
+from llm.llm import LLM
 
 
 class VAD:
@@ -29,6 +30,8 @@ class VAD:
         )
         # 初始化ASR模型
         self.asr = ASR()
+        # 初始化LLM
+        self.llm = LLM()
 
     def load_model(self):
         """加载Silero VAD模型"""
@@ -115,10 +118,9 @@ class VAD:
                 speech_state['start_time'] = None
                 speech_state['last_end_time'] = None
                 
-                # 这里可以添加调用LLM的代码
+                # 调用LLM处理识别后的文本
                 if text:
-                    # TODO: 调用LLM处理识别后的文本
-                    pass
+                    self.llm.chat(text)
                     
                 return True
         return False
