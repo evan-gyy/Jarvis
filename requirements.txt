@@ -7,10 +7,10 @@ torch
 wave
 requests
 pygame
-websockets
+websockets==12.0
 asyncio
-funasr
-funasr-onnx
 fastapi
 uvicorn
 python-multipart 
+sounddevice>=0.4.6
+soundfile>=0.12.1

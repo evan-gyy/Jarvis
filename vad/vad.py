@@ -29,20 +29,16 @@ class VAD:
         self.print_interval = 0.5  # 打印间隔设为0.5秒，即每秒打印2次
         # 加载VAD模型
         self.model, self.vad_iterator = self.load_model()
-        # 初始化音频流
-        self.audio_stream = pyaudio.PyAudio().open(
-            format=pyaudio.paInt16, 
-            channels=1, 
-            rate=self.SAMPLING_RATE, 
-            input=True, 
-            frames_per_buffer=self.CHUNK
-        )
+        self.audio = pyaudio.PyAudio()  # 将 PyAudio 实例保存为类成员
+        self.init_audio_stream()  # 初始化音频流
         # 初始化ASR模型
         self.asr = ASR()
         # 初始化LLM
         self.llm = LLM()
         # 初始化TTS
         self.tts = TTS()
+        self.tts.set_vad(self)  # 设置 VAD 实例到 TTS
+        self.is_playing_audio = False  # 添加标志来追踪是否正在播放音频
 
     def load_model(self):
         """加载Silero VAD模型"""
@@ -122,13 +118,16 @@ class VAD:
 
     def process_audio_chunk(self, data):
         """处理单个音频数据块"""
+        # 如果正在播放音频，跳过录音处理
+        if self.is_playing_audio:
+            return 0.0
+            
         np_array = np.frombuffer(data, dtype=np.int16).copy()
-        audio_chunk = torch.from_numpy(np_array).float() / 32768.0  # 归一化到[-1, 1]范围
+        audio_chunk = torch.from_numpy(np_array).float() / 32768.0
         
         with torch.no_grad():
             speech_prob = self.model(audio_chunk.view(1, -1), self.SAMPLING_RATE).item()
             
-            # 控制打印频率
             current_time = time.time()
             if current_time - self.last_prob_print_time >= self.print_interval:
                 print(f"语音检测概率: {speech_prob:.2f}")
@@ -180,6 +179,26 @@ class VAD:
                 return True
         return False
 
+    def init_audio_stream(self):
+        """初始化音频流"""
+        self.audio_stream = self.audio.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=self.SAMPLING_RATE,
+            input=True,
+            frames_per_buffer=self.CHUNK
+        )
+        
+    def pause_recording(self):
+        """暂停录音"""
+        if hasattr(self, 'audio_stream') and self.audio_stream:
+            self.audio_stream.stop_stream()
+            self.audio_stream.close()
+            
+    def resume_recording(self):
+        """恢复录音"""
+        self.init_audio_stream()
+        
     def run(self):
         """主运行函数"""
         try:
@@ -214,8 +233,11 @@ class VAD:
             print("异常结束，保存当前录音")
             self.save_wav(audio_chunks, speech_state['start_time'], current_time, 0)
 
-        self.audio_stream.stop_stream()
-        self.audio_stream.close()
+        if hasattr(self, 'audio_stream') and self.audio_stream:
+            self.audio_stream.stop_stream()
+            self.audio_stream.close()
+        if hasattr(self, 'audio'):
+            self.audio.terminate()
         self.vad_iterator.reset_states()
         print("资源释放完成")
 

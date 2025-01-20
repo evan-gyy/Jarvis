@@ -3,6 +3,7 @@ import time
 import json
 import asyncio
 from dotenv import load_dotenv
+from traceback import print_exc
 from .streaming_asr_demo import execute_one
 
 class ASR:
@@ -58,6 +59,7 @@ class ASR:
             return None
             
         except Exception as e:
+            print_exc()
             print(f"语音识别出错: {str(e)}")
             return None
 

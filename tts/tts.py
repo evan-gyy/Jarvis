@@ -4,8 +4,9 @@ import uuid
 import requests
 import time
 import os
+import sounddevice as sd
+import soundfile as sf
 from dotenv import load_dotenv
-import pygame
 from io import BytesIO
 
 class TTS:
@@ -26,17 +27,19 @@ class TTS:
         self.host = "openspeech.bytedance.com"
         self.api_url = f"https://{self.host}/api/v1/tts"
         self.header = {"Authorization": f"Bearer;{self.access_token}"}
-        
-        # 初始化pygame音频
-        pygame.mixer.init()
+        self.vad = None  # 添加 VAD 引用
 
-    def synthesize(self, text: str) -> bool:
+    def set_vad(self, vad):
+        """设置 VAD 实例"""
+        self.vad = vad
+        
+    def synthesize(self, text: str) -> float:
         """
         将文本转换为语音并播放
         Args:
             text: 要转换的文本
         Returns:
-            bool: 是否成功
+            float: 结束时间戳，失败则返回0
         """
         try:
             # 构建请求
@@ -51,7 +54,7 @@ class TTS:
                 },
                 "audio": {
                     "voice_type": self.voice_type,
-                    "encoding": "mp3",
+                    "encoding": "wav",
                     "speed_ratio": 1.0,
                     "volume_ratio": 1.0,
                     "pitch_ratio": 1.0,
@@ -74,36 +77,69 @@ class TTS:
             
             if resp.status_code != 200:
                 print(f"TTS API请求失败: {resp.status_code}")
-                return False
+                return 0
                 
             resp_json = resp.json()
             
             if "data" not in resp_json:
                 print(f"TTS响应中没有音频数据: {resp_json}")
-                return False
+                return 0
             
             # 解码音频数据
             audio_data = base64.b64decode(resp_json["data"])
             
             # 计算合成耗时
-            end_time = time.time()
-            synthesis_time = (end_time - start_time) * 1000
+            synthesis_time = (time.time() - start_time) * 1000
             print(f"语音合成耗时: {synthesis_time:.2f}ms")
             
-            # 使用pygame播放音频
-            audio_file = BytesIO(audio_data)
-            pygame.mixer.music.load(audio_file)
-            pygame.mixer.music.play()
+            # 保存音频文件到临时目录
+            temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_file = os.path.join(temp_dir, f"tts_{int(time.time())}.wav")
             
-            # 等待播放完成
-            while pygame.mixer.music.get_busy():
-                pygame.time.Clock().tick(10)
+            with open(temp_file, 'wb') as f:
+                f.write(audio_data)
+            
+            # 使用soundfile读取音频文件
+            data, samplerate = sf.read(temp_file)
+            
+            # 播放音频前暂停录音
+            if self.vad:
+                self.vad.pause_recording()
+                
+            # 播放音频
+            sd.play(data, samplerate)
+            sd.wait()
+            
+            end_time = time.time()
+            
+            # 播放完成后恢复录音
+            if self.vad:
+                self.vad.resume_recording()
+            
+            # 删除临时文件
+            try:
+                os.remove(temp_file)
+            except Exception as e:
+                print(f"删除临时文件失败: {e}")
             
             return end_time
             
         except Exception as e:
+            # 确保在发生异常时也恢复录音
+            if self.vad:
+                self.vad.resume_recording()
             print(f"语音合成出错: {str(e)}")
-            return False
+            return 0
+
+    def play_audio(self, file_path):
+        """使用sounddevice播放音频文件"""
+        try:
+            data, samplerate = sf.read(file_path)
+            sd.play(data, samplerate)
+            sd.wait()
+        except Exception as e:
+            print(f"播放音频失败: {e}")
 
 
 if __name__ == "__main__":
