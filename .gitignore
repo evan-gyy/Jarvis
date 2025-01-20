@@ -2,6 +2,11 @@ silero-vad-master/
 models/
 assets/
 vad/output/
+# Python缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+
 
 # 环境变量文件
 .env

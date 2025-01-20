@@ -1,56 +1,69 @@
-from funasr import AutoModel
-from funasr.utils.postprocess_utils import rich_transcription_postprocess
-import time
 import os
+import time
+import json
+import asyncio
+from dotenv import load_dotenv
+from .streaming_asr_demo import execute_one
 
 class ASR:
-    def __init__(self, model_dir="models/SenseVoiceSmall", device="cuda:0"):
-        print("初始化ASR模型...")
-        start_time = time.time()
-        self.model = AutoModel(
-            model=model_dir,
-            # vad_model="fsmn-vad",
-            # vad_kwargs={"max_single_segment_time": 30000},
-            device=device
-        )
-        end_time = time.time()
-        print(f"ASR模型加载完成，耗时: {end_time - start_time:.2f}秒")
+    def __init__(self):
+        # 加载环境变量
+        load_dotenv()
+        
+        # 从环境变量获取配置
+        self.appid = os.getenv("BYTEDANCE_APPID")
+        self.token = os.getenv("BYTEDANCE_ACCESS_TOKEN")
+        self.cluster = os.getenv("BYTEDANCE_CLUSTER_ASR")
+        
+        if not all([self.appid, self.token, self.cluster]):
+            raise ValueError("请确保环境变量中设置了BYTEDANCE_APPID、BYTEDANCE_ACCESS_TOKEN和BYTEDANCE_CLUSTER_ASR")
 
     def transcribe(self, audio_path):
         """
         将音频文件转换为文本
+        
         Args:
-            audio_path: 音频文件路径
+            audio_path (str): 音频文件的路径
+            
+        Returns:
+            str: 识别出的文本，如果识别失败返回None
         """
         try:
-            res = self.model.generate(
-                input=audio_path,
-                cache={},
-                # language="auto",
-                language="zh",
-                use_itn=True,
-                batch_size_s=60,
-                merge_vad=True,
-                merge_length_s=15,
+            # 开始计时
+            transcribe_start = time.time()
+            
+            # 判断音频格式
+            audio_format = "wav" if audio_path.lower().endswith('.wav') else "mp3"
+            
+            # 调用字节跳动ASR服务
+            result = execute_one(
+                {
+                    'id': 1,
+                    'path': audio_path
+                },
+                cluster=self.cluster,
+                appid=self.appid,
+                token=self.token,
+                format=audio_format
             )
             
-            # 添加调试信息
-            print(f"原始识别结果: {res[0]['text']}")
+            # 计算转录耗时
+            # transcribe_time = (time.time() - transcribe_start) * 1000
+            # print(f"转录耗时: {transcribe_time:.2f}ms")
             
-            text = rich_transcription_postprocess(res[0]["text"])
+            # 解析结果
+            if result and 'result' in result:
+                return result['result']['payload_msg']['result'][0]['text']
+                    
+            return None
             
-            # 如果结果包含大量非中文字符，可能是识别出现问题
-            if len([c for c in text if '\u4e00' <= c <= '\u9fff']) < len(text) * 0.5:
-                print("警告：识别结果包含大量非中文字符，可能存在识别错误")
-            
-            return text
         except Exception as e:
-            print(f"转录过程出现错误: {str(e)}")
+            print(f"语音识别出错: {str(e)}")
             return None
 
+
 if __name__ == "__main__":
-    # test
     asr = ASR()
-    text = asr.transcribe("test.wav")
+    text = asr.transcribe("vad/output/output_1737293087_0.wav")
     print(text)
 

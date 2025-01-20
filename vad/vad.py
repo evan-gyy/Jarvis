@@ -5,8 +5,10 @@ import pyaudio
 import wave
 import time
 import os
+import glob
 from asr.asr import ASR
 from llm.llm import LLM
+from tts.tts import TTS
 
 
 class VAD:
@@ -15,6 +17,13 @@ class VAD:
         self.CHUNK = 512 
         self.THRESHOLD = 0.8
         self.output_dir = os.path.join(os.path.dirname(__file__), 'output')
+        self.max_wav_files = 10  # 最大保留的WAV文件数量
+        
+        # 确保输出目录存在
+        os.makedirs(self.output_dir, exist_ok=True)
+        # 初始清理
+        self.cleanup_wav_files()
+        
         # 添加上次打印时间的记录
         self.last_prob_print_time = 0
         self.print_interval = 0.5  # 打印间隔设为0.5秒，即每秒打印2次
@@ -32,6 +41,8 @@ class VAD:
         self.asr = ASR()
         # 初始化LLM
         self.llm = LLM()
+        # 初始化TTS
+        self.tts = TTS()
 
     def load_model(self):
         """加载Silero VAD模型"""
@@ -44,9 +55,38 @@ class VAD:
         print(f"VAD模型加载完成，耗时: {end_time - start_time:.2f} 秒")
         return model, vad_iterator
 
+    def cleanup_wav_files(self):
+        """
+        清理WAV文件，只保留最新的N个文件
+        """
+        try:
+            # 获取所有wav文件
+            wav_files = glob.glob(os.path.join(self.output_dir, "*.wav"))
+            
+            # 如果文件数量超过限制
+            if len(wav_files) > self.max_wav_files:
+                # 按修改时间排序
+                wav_files.sort(key=lambda x: os.path.getmtime(x))
+                
+                # 计算需要删除的文件数量
+                files_to_delete = len(wav_files) - self.max_wav_files
+                
+                # 删除最旧的文件
+                for i in range(files_to_delete):
+                    try:
+                        os.remove(wav_files[i])
+                        print(f"已删除旧音频文件: {os.path.basename(wav_files[i])}")
+                    except Exception as e:
+                        print(f"删除文件 {wav_files[i]} 时出错: {str(e)}")
+                
+        except Exception as e:
+            print(f"清理WAV文件时出错: {str(e)}")
+
     def save_wav(self, audio_chunks, start_time, end_time, status):
+        """保存WAV文件并进行语音识别"""
         print("保存音频文件...")
-        # 将音频数据块合并为一个数组
+        
+        # 保存逻辑
         audio_data = np.concatenate([np.frombuffer(chunk, dtype=np.int16) for chunk in audio_chunks])
         
         # 确保输出目录存在
@@ -57,14 +97,15 @@ class VAD:
         
         # 保存为WAV文件
         with wave.open(wav_filename, 'wb') as wf:
-            wf.setnchannels(1)  # 单声道
-            wf.setsampwidth(2)  # 16位采样
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
             wf.setframerate(self.SAMPLING_RATE)
             wf.writeframes(audio_data)
             
         print(f"音频保存为 {wav_filename}，时长为 {(end_time - start_time):.2f} s，状态：{status}")
         
         # 保存完音频后立即进行ASR识别
+        text = None
         if os.path.exists(wav_filename):
             print("开始进行语音识别...")
             start_time = time.time()
@@ -73,8 +114,11 @@ class VAD:
             print(f"语音识别完成，耗时: {(end_time - start_time) * 1000:.2f} ms")
             if text:
                 print(f"识别结果: {text}")
-                return text
-        return None
+        
+        # 在语音识别完成后进行文件清理
+        self.cleanup_wav_files()
+            
+        return text
 
     def process_audio_chunk(self, data):
         """处理单个音频数据块"""
@@ -114,13 +158,24 @@ class VAD:
             if time.time() - speech_state['last_end_time'] >= 1.0:
                 current_time = time.time()
                 print("停止检测到语音，保存录音并进行识别")
+                
+                # 开始计时
+                pipeline_start_time = time.time()
+                
+                # 语音识别
                 text = self.save_wav(audio_chunks, speech_state['start_time'], current_time, 0)
                 speech_state['start_time'] = None
                 speech_state['last_end_time'] = None
                 
                 # 调用LLM处理识别后的文本
                 if text:
-                    self.llm.chat(text)
+                    response = self.llm.chat(text)
+                    # 使用TTS合成语音并播放
+                    if response:
+                        end_time = self.tts.synthesize(response)
+                        # 计算总延时
+                        total_latency = (end_time - pipeline_start_time)
+                        print(f"总耗时: {total_latency:.2f}s")
                     
                 return True
         return False

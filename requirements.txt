@@ -4,4 +4,13 @@ python-dotenv
 pyaudio
 numpy
 torch
-wave 
+wave
+requests
+pygame
+websockets
+asyncio
+funasr
+funasr-onnx
+fastapi
+uvicorn
+python-multipart 

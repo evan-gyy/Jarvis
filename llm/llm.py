@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 import time
 import sys
 
+from .prompt_template import LIANLIAN
+
 class LLM:
     def __init__(self, api_key: str = None, max_history_turns: int = 10, max_tokens: int = 4000):
         """
@@ -30,7 +32,7 @@ class LLM:
         self.max_history_turns = max_history_turns
         self.max_tokens = max_tokens
         self.history: List[Dict[str, str]] = []
-        self.system_prompt = "你是一个有帮助的AI助手，可以用中文回答用户的问题。"
+        self.system_prompt = LIANLIAN
         
         # 初始化tokenizer
         self.encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")  # 使用GPT tokenizer作为近似
@@ -58,7 +60,7 @@ class LLM:
             total_tokens -= self.count_tokens(removed_msg["content"])
             
         trim_time = (time.time() - trim_start_time) * 1000
-        print(f"历史记录修剪耗时: {trim_time:.2f}ms")
+        # print(f"历史记录修剪耗时: {trim_time:.2f}ms")
     
     def chat(self, user_input: str) -> str:
         """
@@ -103,7 +105,7 @@ class LLM:
                     full_response += content
             
             # 打印延迟信息
-            print(f"\n首个token延迟: {first_token_time:.2f}ms\n")
+            print(f"\n首token耗时: {first_token_time:.2f}ms | 总耗时: {(time.time() - api_start_time) * 1000:.2f}ms")
             
             # 添加助手回复到历史记录
             self.history.append({"role": "assistant", "content": full_response})
