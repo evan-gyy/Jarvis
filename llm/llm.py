@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 import time
 import sys
-
+from typing import Generator
 from .prompt_template import LIANLIAN
 
 class LLM:
@@ -60,9 +60,9 @@ class LLM:
             total_tokens -= self.count_tokens(removed_msg["content"])
             
         trim_time = (time.time() - trim_start_time) * 1000
-        # print(f"历史记录修剪耗时: {trim_time:.2f}ms")
+        print(f"\n历史记录修剪耗时: {trim_time:.2f}ms")
     
-    def chat(self, user_input: str) -> str:
+    def stream_chat(self, user_input: str) -> Generator[str, None, None]:
         """
         与模型进行对话，使用流式输出
         Args:
@@ -92,6 +92,7 @@ class LLM:
                 stream=True
             )
             
+            sentence_chunk = ""
             for chunk in response:
                 if chunk.choices[0].delta.content:
                     # 计算首个token的延迟
@@ -100,13 +101,17 @@ class LLM:
                         first_token_received = True
                     
                     # 流式输出文本
-                    content = chunk.choices[0].delta.content
-                    print(content, end="", flush=True)
-                    full_response += content
+                    token = chunk.choices[0].delta.content
+                    sentence_chunk += token
+                    if token in ['。', '！', '？', ' ']:
+                        print(sentence_chunk, end="", flush=True)
+                        yield sentence_chunk
+                        sentence_chunk = ""
+
+                    full_response += token
             
-            # 打印延迟信息
-            print(f"\n首token耗时: {first_token_time:.2f}ms | 总耗时: {(time.time() - api_start_time) * 1000:.2f}ms")
-            
+            print(f"\n首token耗时: {first_token_time:.2f}ms")
+
             # 添加助手回复到历史记录
             self.history.append({"role": "assistant", "content": full_response})
             
@@ -130,10 +135,5 @@ class LLM:
 # 测试代码
 if __name__ == "__main__":
     llm = LLM()
-    
-    # 测试对话
-    responses = [
-        llm.chat("你好，请介绍一下你自己"),
-        llm.chat("你能给我讲个笑话吗？"),
-        llm.chat("你能记得我们之前聊了什么吗？")
-    ]
+    for response in llm.stream_chat("你好，请介绍一下你自己"):
+        pass
