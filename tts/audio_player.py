@@ -1,4 +1,5 @@
-import sounddevice as sd
+import pyaudio
+import wave
 import soundfile as sf
 import threading
 from queue import Queue, Empty
@@ -18,6 +19,9 @@ class AudioPlayer:
         self.running = True
         self.stream_processor = None
         self.should_resume_recording = False  # 添加标志来控制录音恢复
+        
+        # 初始化 PyAudio
+        self.p = pyaudio.PyAudio()
         
         # 启动播放线程
         self.player_thread = threading.Thread(target=self._player_worker)
@@ -87,7 +91,7 @@ class AudioPlayer:
         """播放单个音频文件"""
         try:
             # 暂停录音
-            if self.vad and not self.is_playing:  # 只在第一次播放时暂停
+            if self.vad and not self.is_playing:
                 self.vad.pause_recording()
                 self.is_playing = True
             
@@ -99,14 +103,33 @@ class AudioPlayer:
                     print(f"首次响应延迟: {latency:.2f}s")
             
             # 播放音频
-            data, samplerate = sf.read(file_path)
-            sd.play(data, samplerate)
-            sd.wait()
+            wf = wave.open(file_path, 'rb')
+            
+            # 打开音频流
+            stream = self.p.open(
+                format=self.p.get_format_from_width(wf.getsampwidth()),
+                channels=wf.getnchannels(),
+                rate=wf.getframerate(),
+                output=True
+            )
+            
+            # 读取数据
+            chunk_size = 1024
+            data = wf.readframes(chunk_size)
+            
+            # 播放音频
+            while data and self.running:
+                stream.write(data)
+                data = wf.readframes(chunk_size)
+            
+            # 清理资源
+            stream.stop_stream()
+            stream.close()
+            wf.close()
             
             # 更新已播放句子计数
             if self.stream_processor:
                 self.stream_processor.played_sentences += 1
-                # 检查是否是最后一个句子
                 if self.stream_processor.played_sentences >= self.stream_processor.total_sentences:
                     self.should_resume_recording = True
                     self.is_playing = False
@@ -142,4 +165,8 @@ class AudioPlayer:
             try:
                 self.audio_queue.get_nowait()
             except Empty:
-                break 
+                break
+        
+        # 终止 PyAudio
+        self.p.terminate()
+    
