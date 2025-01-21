@@ -7,6 +7,7 @@ import time
 import sys
 from typing import Generator
 from .prompt_template import LIANLIAN
+from traceback import print_exc
 
 class LLM:
     def __init__(self, api_key: str = None, max_history_turns: int = 10, max_tokens: int = 4000):
@@ -60,7 +61,7 @@ class LLM:
             total_tokens -= self.count_tokens(removed_msg["content"])
             
         trim_time = (time.time() - trim_start_time) * 1000
-        print(f"\n历史记录修剪耗时: {trim_time:.2f}ms")
+        # print(f"\n历史记录修剪耗时: {trim_time:.2f}ms")
     
     def stream_chat(self, user_input: str) -> Generator[str, None, None]:
         """
@@ -109,6 +110,11 @@ class LLM:
                         sentence_chunk = ""
 
                     full_response += token
+
+            # 处理最后一个句子块
+            if sentence_chunk:
+                print(sentence_chunk, end="", flush=True)
+                yield sentence_chunk
             
             print(f"\n首token耗时: {first_token_time:.2f}ms")
 
@@ -118,14 +124,17 @@ class LLM:
             # 在所有处理完成后，最后进行历史记录的修剪
             self.trim_history()
             
-            return full_response
+            # 最后才发送结束标记
+            yield "__END__"
             
         except Exception as e:
+            print_exc()
             print(f"\n调用API时出错: {str(e)}")
-            # 发生错误时，移除刚才添加的用户输入，保持历史记录的一致性
             if self.history and self.history[-1]["role"] == "user":
                 self.history.pop()
-            return f"抱歉，发生了错误: {str(e)}"
+            if sentence_chunk:  # 如果有未发送的句子块，先发送
+                yield sentence_chunk
+            yield "__END__"  # 确保即使出错也发送结束标记
     
     def clear_history(self):
         """清空对话历史"""
@@ -136,4 +145,4 @@ class LLM:
 if __name__ == "__main__":
     llm = LLM()
     for response in llm.stream_chat("你好，请介绍一下你自己"):
-        pass
+        print(response)

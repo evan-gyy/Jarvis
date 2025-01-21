@@ -8,6 +8,7 @@ import sounddevice as sd
 import soundfile as sf
 from dotenv import load_dotenv
 from io import BytesIO
+from .audio_player import AudioPlayer
 
 class TTS:
     def __init__(self):
@@ -28,18 +29,20 @@ class TTS:
         self.api_url = f"https://{self.host}/api/v1/tts"
         self.header = {"Authorization": f"Bearer;{self.access_token}"}
         self.vad = None  # 添加 VAD 引用
+        self.audio_player = AudioPlayer()
 
     def set_vad(self, vad):
         """设置 VAD 实例"""
         self.vad = vad
+        self.audio_player.vad = vad
         
-    def synthesize(self, text: str) -> float:
+    def synthesize(self, text: str) -> str:
         """
-        将文本转换为语音并播放
+        将文本转换为语音并返回音频文件路径
         Args:
             text: 要转换的文本
         Returns:
-            float: 结束时间戳，失败则返回0
+            str: 音频文件路径
         """
         try:
             # 构建请求
@@ -77,60 +80,35 @@ class TTS:
             
             if resp.status_code != 200:
                 print(f"TTS API请求失败: {resp.status_code}")
-                return 0
+                return None
                 
             resp_json = resp.json()
             
             if "data" not in resp_json:
                 print(f"TTS响应中没有音频数据: {resp_json}")
-                return 0
+                return None
             
             # 解码音频数据
             audio_data = base64.b64decode(resp_json["data"])
             
             # 计算合成耗时
             synthesis_time = (time.time() - start_time) * 1000
-            print(f"语音合成耗时: {synthesis_time:.2f}ms")
+            print(f"合成完成：{text} | 耗时: {synthesis_time:.2f}ms")
             
             # 保存音频文件到临时目录
             temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
             os.makedirs(temp_dir, exist_ok=True)
-            temp_file = os.path.join(temp_dir, f"tts_{int(time.time())}.wav")
+            temp_file = os.path.join(temp_dir, f"tts_{int(time.time() * 10)}.wav")
             
             with open(temp_file, 'wb') as f:
                 f.write(audio_data)
             
-            # 使用soundfile读取音频文件
-            data, samplerate = sf.read(temp_file)
-            
-            # 播放音频前暂停录音
-            if self.vad:
-                self.vad.pause_recording()
-                
-            # 播放音频
-            sd.play(data, samplerate)
-            sd.wait()
-            
-            end_time = time.time()
-            
-            # 播放完成后恢复录音
-            if self.vad:
-                self.vad.resume_recording()
-            
-            # 删除临时文件
-            try:
-                os.remove(temp_file)
-            except Exception as e:
-                print(f"删除临时文件失败: {e}")
-            
-            return end_time
+            # 返回音频文件路径而不是直接播放
+            return temp_file
             
         except Exception as e:
-            # 确保在发生异常时也恢复录音
-            if self.vad:
-                self.vad.resume_recording()
             print(f"语音合成出错: {str(e)}")
-            return 0
+            return None
 
     def play_audio(self, file_path):
         """使用sounddevice播放音频文件"""

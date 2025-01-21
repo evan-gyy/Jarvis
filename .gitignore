@@ -10,6 +10,8 @@ __pycache__/
 *$py.class
 
 
-
 # 环境变量文件
 .env
+
+# 性能测试结果
+.xlsx

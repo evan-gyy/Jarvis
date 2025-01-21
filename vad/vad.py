@@ -6,9 +6,12 @@ import wave
 import time
 import os
 import glob
+from traceback import print_exc
 from asr.asr import ASR
 from llm.llm import LLM
 from tts.tts import TTS
+from .workflow import StreamProcessor
+import asyncio
 
 
 class VAD:
@@ -29,8 +32,9 @@ class VAD:
         self.print_interval = 0.5  # 打印间隔设为0.5秒，即每秒打印2次
         # 加载VAD模型
         self.model, self.vad_iterator = self.load_model()
-        self.audio = pyaudio.PyAudio()  # 将 PyAudio 实例保存为类成员
-        self.init_audio_stream()  # 初始化音频流
+        self.is_recording_paused = False  # 添加标志来追踪录音状态
+        self.audio = pyaudio.PyAudio()
+        self.init_audio_stream()
         # 初始化ASR模型
         self.asr = ASR()
         # 初始化LLM
@@ -39,6 +43,8 @@ class VAD:
         self.tts = TTS()
         self.tts.set_vad(self)  # 设置 VAD 实例到 TTS
         self.is_playing_audio = False  # 添加标志来追踪是否正在播放音频
+        self.stream_processor = StreamProcessor(self.llm, self.tts)
+        self.tts.audio_player.set_stream_processor(self.stream_processor)  # 设置引用
 
     def load_model(self):
         """加载Silero VAD模型"""
@@ -119,7 +125,7 @@ class VAD:
     def process_audio_chunk(self, data):
         """处理单个音频数据块"""
         # 如果正在播放音频，跳过录音处理
-        if self.is_playing_audio:
+        if self.tts.audio_player.is_playing:
             return 0.0
             
         np_array = np.frombuffer(data, dtype=np.int16).copy()
@@ -155,50 +161,105 @@ class VAD:
                 speech_state['last_end_time'] = time.time()
             
             if time.time() - speech_state['last_end_time'] >= 1.0:
-                current_time = time.time()
-                print("停止检测到语音，保存录音并进行识别")
-                
-                # 开始计时
-                pipeline_start_time = time.time()
-                
-                # 语音识别
-                text = self.save_wav(audio_chunks, speech_state['start_time'], current_time, 0)
-                speech_state['start_time'] = None
-                speech_state['last_end_time'] = None
-                
-                # 调用LLM处理识别后的文本
-                if text:
-                    response = self.llm.chat(text)
-                    # 使用TTS合成语音并播放
-                    if response:
-                        end_time = self.tts.synthesize(response)
-                        # 计算总延时
-                        total_latency = (end_time - pipeline_start_time)
-                        print(f"总耗时: {total_latency:.2f}s")
+                try:
+                    current_time = time.time()
+                    print("停止检测到语音，保存录音并进行识别")
                     
-                return True
+                    # 开始计时
+                    self.pipeline_start_time = time.time()
+                    # 重置音频播放器的计时
+                    self.tts.audio_player.reset_timing()
+                    
+                    # 语音识别
+                    text = self.save_wav(audio_chunks, speech_state['start_time'], current_time, 0)
+                    speech_state['start_time'] = None
+                    speech_state['last_end_time'] = None
+                    
+                    # 使用新的流式处理
+                    if text:
+                        asyncio.run(self.stream_processor.process_stream(text))
+                        self.stream_processor.wait_for_completion()
+                        
+                    return True
+                
+                except Exception as e:
+                    print(f"处理静音状态时出错: {str(e)}")
+                    # 重置状态
+                    speech_state['start_time'] = None
+                    speech_state['last_end_time'] = None
+                    return True  # 返回True以清空音频块
+                
         return False
 
     def init_audio_stream(self):
         """初始化音频流"""
-        self.audio_stream = self.audio.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=self.SAMPLING_RATE,
-            input=True,
-            frames_per_buffer=self.CHUNK
-        )
-        
+        try:
+            if hasattr(self, 'audio_stream'):
+                if self.audio_stream.is_active():
+                    self.audio_stream.stop_stream()
+                self.audio_stream.close()
+            
+            # 重新初始化 PyAudio 实例
+            if hasattr(self, 'audio'):
+                self.audio.terminate()
+            self.audio = pyaudio.PyAudio()
+            
+            self.audio_stream = self.audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=self.SAMPLING_RATE,
+                input=True,
+                frames_per_buffer=self.CHUNK
+            )
+        except Exception as e:
+            print_exc()
+            print(f"初始化音频流时出错: {e}")
+            # 如果出错，等待一段时间后重试
+            time.sleep(0.5)
+            try:
+                self.audio = pyaudio.PyAudio()
+                self.audio_stream = self.audio.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=self.SAMPLING_RATE,
+                    input=True,
+                    frames_per_buffer=self.CHUNK
+                )
+            except Exception as e:
+                print_exc()
+                print(f"重试初始化音频流时出错: {e}")
+                raise
+
     def pause_recording(self):
         """暂停录音"""
-        if hasattr(self, 'audio_stream') and self.audio_stream:
-            self.audio_stream.stop_stream()
-            self.audio_stream.close()
-            
+        if not self.is_recording_paused and hasattr(self, 'audio_stream') and self.audio_stream:
+            try:
+                self.audio_stream.stop_stream()
+                self.is_recording_paused = True
+            except Exception as e:
+                print_exc()
+                print(f"暂停录音时出错: {e}")
+
     def resume_recording(self):
         """恢复录音"""
-        self.init_audio_stream()
-        
+        if self.is_recording_paused:
+            try:
+                if hasattr(self, 'audio_stream') and self.audio_stream:
+                    self.audio_stream.start_stream()
+                else:
+                    self.init_audio_stream()
+                self.is_recording_paused = False
+            except Exception as e:
+                print_exc()
+                print(f"恢复录音时出错: {e}")
+                # 如果启动失败，尝试重新初始化
+                try:
+                    self.init_audio_stream()
+                    self.is_recording_paused = False
+                except Exception as e:
+                    print_exc()
+                    print(f"重新初始化音频流时出错: {e}")
+
     def run(self):
         """主运行函数"""
         try:
@@ -223,23 +284,43 @@ class VAD:
         except KeyboardInterrupt:
             print("\n录音结束")
 
+        except Exception as e:
+            print_exc()
+            print(f"发生错误: {e}")
+
         finally:
             self.cleanup(speech_state, audio_chunks)
 
     def cleanup(self, speech_state, audio_chunks):
         """清理资源"""
-        if speech_state['start_time'] is not None:
-            current_time = time.time()
-            print("异常结束，保存当前录音")
-            self.save_wav(audio_chunks, speech_state['start_time'], current_time, 0)
+        try:
+            # 先停止音频播放器
+            if hasattr(self, 'tts') and hasattr(self.tts, 'audio_player'):
+                self.tts.audio_player.stop()
 
-        if hasattr(self, 'audio_stream') and self.audio_stream:
-            self.audio_stream.stop_stream()
-            self.audio_stream.close()
-        if hasattr(self, 'audio'):
-            self.audio.terminate()
-        self.vad_iterator.reset_states()
-        print("资源释放完成")
+            # 停止流处理器
+            if hasattr(self, 'stream_processor'):
+                self.stream_processor.stop()
+                self.stream_processor.wait_for_completion()
+
+            if speech_state['start_time'] is not None:
+                current_time = time.time()
+                print("异常结束，保存当前录音")
+                self.save_wav(audio_chunks, speech_state['start_time'], current_time, 0)
+
+            if hasattr(self, 'audio_stream'):
+                if self.audio_stream.is_active():
+                    self.audio_stream.stop_stream()
+                self.audio_stream.close()
+            
+            if hasattr(self, 'audio'):
+                self.audio.terminate()
+                
+            self.vad_iterator.reset_states()
+            print("资源释放完成")
+        except Exception as e:
+            print_exc()
+            print(f"清理资源时出错: {str(e)}")
 
 
 if __name__ == "__main__":
