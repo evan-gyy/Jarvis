@@ -58,6 +58,7 @@ class TTS:
                 "audio": {
                     "voice_type": self.voice_type,
                     "encoding": "wav",
+                    "rate": 16000,  
                     "speed_ratio": 1.0,
                     "volume_ratio": 1.0,
                     "pitch_ratio": 1.0,
